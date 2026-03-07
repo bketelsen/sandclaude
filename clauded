@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+IMAGE_NAME="clauded"
+CLAUDE_CONFIG="$HOME/.claude"
+
+usage() {
+    echo "Usage: clauded [-s] [-b] [-r] [-h] [workspace]"
+    echo ""
+    echo "Run Claude Code in a Docker container."
+    echo ""
+    echo "Options:"
+    echo "  -s    Open bash shell instead of claude"
+    echo "  -b    Force rebuild of the Docker image"
+    echo "  -r    Resume the previous claude session"
+    echo "  -h    Show this help message"
+    echo ""
+    echo "Arguments:"
+    echo "  workspace   Path to mount as /workspace (default: current directory)"
+}
+
+SHELL_MODE=false
+FORCE_BUILD=false
+RESUME=false
+while getopts "sbrh" opt; do
+    case "$opt" in
+        s) SHELL_MODE=true ;;
+        b) FORCE_BUILD=true ;;
+        r) RESUME=true ;;
+        h) usage; exit 0 ;;
+        *) usage; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+WORKSPACE="${1:-$(pwd)}"
+
+if [ ! -f "$CLAUDE_CONFIG/.credentials.json" ]; then
+    echo "Error: No Claude credentials found at $CLAUDE_CONFIG/.credentials.json"
+    echo "Run 'claude' locally first to log in via OAuth."
+    exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+
+build_image() {
+    if [ ! -f "$SCRIPT_DIR/Dockerfile" ]; then
+        echo "Error: No Dockerfile found in $SCRIPT_DIR"
+        exit 1
+    fi
+    echo "Building $IMAGE_NAME image..."
+    docker build \
+        --build-arg USER_ID="$(id -u)" \
+        --build-arg GROUP_ID="$(id -g)" \
+        -t "$IMAGE_NAME" \
+        "$SCRIPT_DIR"
+}
+
+if [ "$FORCE_BUILD" = true ]; then
+    build_image
+elif ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+    build_image
+elif [ -f "$SCRIPT_DIR/Dockerfile" ] && \
+     [ "$(stat -c %Y "$SCRIPT_DIR/Dockerfile")" -gt "$(docker inspect -f '{{.Created}}' "$IMAGE_NAME" 2>/dev/null | xargs -I{} date -d {} +%s 2>/dev/null || echo 0)" ]; then
+    build_image
+fi
+
+clear
+echo "Starting Claude Code in: $WORKSPACE"
+
+# Extract gh token from keyring for use inside the container
+GH_TOKEN="$(gh auth token 2>/dev/null || true)"
+
+DOCKER_ARGS=(
+    --rm -it
+    -v "$CLAUDE_CONFIG:/home/claude/.claude"
+    -v "$HOME/.claude.json:/home/claude/.claude.json"
+    -v "$HOME/.config/gh:/home/claude/.config/gh:ro"
+    -v "$HOME/.config/.jira:/home/claude/.config/.jira:ro"
+    ${GH_TOKEN:+-e GH_TOKEN="$GH_TOKEN"}
+    ${JIRA_API_TOKEN:+-e JIRA_API_TOKEN="$JIRA_API_TOKEN"}
+    -v "$WORKSPACE:/workspace"
+)
+
+if [ "$SHELL_MODE" = true ]; then
+    exec docker run "${DOCKER_ARGS[@]}" --entrypoint /bin/bash "$IMAGE_NAME"
+elif [ "$RESUME" = true ]; then
+    exec docker run "${DOCKER_ARGS[@]}" "$IMAGE_NAME" claude --resume
+else
+    exec docker run "${DOCKER_ARGS[@]}" "$IMAGE_NAME"
+fi
