@@ -47,10 +47,6 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     apt-get update && apt-get install -y --no-install-recommends gh && \
     rm -rf /var/lib/apt/lists/*
 
-# Install jira-cli
-RUN curl -fsSL https://github.com/ankitpokhrel/jira-cli/releases/download/v1.7.0/jira_1.7.0_linux_x86_64.tar.gz \
-    | tar -xz -C /usr/local/bin --strip-components=2 jira_1.7.0_linux_x86_64/bin/jira
-
 # Run as non-root user matching host UID/GID (overridable at runtime)
 ARG USER_ID=1000
 ARG GROUP_ID=1000
